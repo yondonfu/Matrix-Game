@@ -11,6 +11,7 @@ from diffusers.utils import load_image
 from pipeline import CausalInferenceStreamingPipeline
 from wan.vae.wanx_vae import get_wanx_vae_wrapper
 from demo_utils.vae_block3 import VAEDecoderWrapper
+from demo_utils.constant import ZERO_VAE_CACHE
 from utils.visualize import process_video
 from utils.misc import set_seed
 from utils.conditions import *
@@ -27,6 +28,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument("--pretrained_model_path", type=str, default="Matrix-Game-2.0", help="Path to the VAE model folder")
     parser.add_argument("--profile", action="store_true", help="Enable performance profiling")
+    parser.add_argument("--vae-warmup", action="store_true", help="Enable VAE decoder torch.compile warmup")
     args = parser.parse_args()
     return args
 
@@ -63,6 +65,36 @@ class InteractiveGameInference:
         current_vae_decoder.requires_grad_(False)
         current_vae_decoder.eval()
         current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
+        
+        # Conditionally warm up the compiled VAE decoder
+        if self.args.vae_warmup:
+            print("Warming up VAE decoder torch.compile...")
+            # Get runtime dimensions from config
+            num_frame_per_block = getattr(self.config, "num_frame_per_block", 1)
+            batch_size, num_channels, _, height, width = self.config.image_or_video_shape
+            
+            # Create dummy tensor matching exact runtime dimensions
+            dummy_latent = torch.zeros([batch_size, num_frame_per_block, num_channels, height, width], 
+                                     dtype=self.weight_dtype, device=self.device)
+            print(f"Using dummy tensor dimensions: [{batch_size}, {num_frame_per_block}, {num_channels}, {height}, {width}] with dtype conversion {self.weight_dtype} -> .half()")
+            
+            dummy_cache = copy.deepcopy(ZERO_VAE_CACHE)
+            for j in range(len(dummy_cache)):
+                dummy_cache[j] = None
+                
+            with torch.no_grad():
+                # Match exact runtime call pattern and capture warmed cache
+                _, vae_cache = current_vae_decoder(dummy_latent.half(), *dummy_cache)
+                    
+            print("VAE decoder torch.compile warmup completed.")
+            print("Captured warmed VAE cache for runtime use.")
+            
+            # Store warmed cache for later use
+            self.vae_cache = vae_cache
+        else:
+            print("VAE decoder torch.compile warmup disabled.")
+            self.vae_cache = None
+        
         pipeline = CausalInferenceStreamingPipeline(self.config, generator=generator, vae_decoder=current_vae_decoder)
         if self.args.checkpoint_path:
             print("Loading Pretrained Model...")
@@ -145,7 +177,8 @@ class InteractiveGameInference:
                 output_folder=self.args.output_folder,
                 name=os.path.basename(img_path),
                 mode=mode,
-                profile=self.args.profile
+                profile=self.args.profile,
+                vae_cache=self.vae_cache
             )
         
 def main():

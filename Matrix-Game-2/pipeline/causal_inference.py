@@ -477,7 +477,8 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
         output_folder = None,
         name = None,
         mode = 'universal',
-        profile = False
+        profile = False,
+        vae_cache = None
     ) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
@@ -511,9 +512,14 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
             dtype=noise.dtype
         )
         videos = []
-        vae_cache = copy.deepcopy(ZERO_VAE_CACHE)
-        for j in range(len(vae_cache)):
-            vae_cache[j] = None
+        # Use provided vae_cache or initialize fresh one
+        if vae_cache is None:
+            vae_cache = copy.deepcopy(ZERO_VAE_CACHE)
+            for j in range(len(vae_cache)):
+                vae_cache[j] = None
+            print("Using fresh VAE cache")
+        else:
+            print("Using provided warmed VAE cache")
         # Set up profiling if requested
         self.kv_cache1=self.kv_cache_keyboard=self.kv_cache_mouse=self.crossattn_cache=None
         # Step 1: Initialize KV cache to all zeros
@@ -669,6 +675,7 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
                 vae_start.record()
                 
             denoised_pred = denoised_pred.transpose(1,2)
+            # print(f"Runtime VAE decoder input dims: {list(denoised_pred.shape)} with dtype {denoised_pred.dtype} -> .half()")
             video, vae_cache = self.vae_decoder(denoised_pred.half(), *vae_cache)
             
             # End VAE timing immediately after decoder
