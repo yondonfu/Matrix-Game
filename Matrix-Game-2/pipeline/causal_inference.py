@@ -476,7 +476,8 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
         return_latents: bool = False,
         output_folder = None,
         name = None,
-        mode = 'universal'
+        mode = 'universal',
+        profile = False
     ) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
@@ -579,13 +580,27 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
         # Step 3: Temporal denoising loop
         all_num_frames = [self.num_frame_per_block] * num_blocks
         
+        # Initialize profiling events if needed
+        if profile:
+            diffusion_start = torch.cuda.Event(enable_timing=True)
+            diffusion_end = torch.cuda.Event(enable_timing=True)
+            vae_start = torch.cuda.Event(enable_timing=True)
+            vae_end = torch.cuda.Event(enable_timing=True)
+            total_diffusion_time = 0.0
+            total_vae_time = 0.0
+            block_count = 0
+        
         for current_num_frames in all_num_frames:
             noisy_input = noise[
                 :, :, current_start_frame - num_input_frames:current_start_frame + current_num_frames - num_input_frames]
 
             current_actions = get_current_action(mode=mode)
             new_act, conditional_dict = cond_current(conditional_dict, current_start_frame, self.num_frame_per_block, replace=current_actions, mode=mode)
+            
             # Step 3.1: Spatial denoising loop
+            if profile:
+                torch.cuda.synchronize()
+                diffusion_start.record()
 
             for index, current_timestep in enumerate(self.denoising_step_list):
                 # set current timestep
@@ -643,7 +658,16 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
                 current_start=current_start_frame * self.frame_seq_length,
             )
 
-            # Step 3.4: update the start and end frame indices
+            # End diffusion timing
+            if profile:
+                torch.cuda.synchronize()
+                diffusion_end.record()
+
+            # Step 3.4: update the start and end frame indices and decode with VAE
+            if profile:
+                torch.cuda.synchronize()
+                vae_start.record()
+                
             denoised_pred = denoised_pred.transpose(1,2)
             video, vae_cache = self.vae_decoder(denoised_pred.half(), *vae_cache)
             videos += [video]
@@ -661,6 +685,51 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
                     conditional_dict["keyboard_cond"][0, : 1 + 4 * (current_start_frame + self.num_frame_per_block-1)].float().cpu().numpy()
                 )
             process_video(video.astype(np.uint8), output_folder+f'/{name}_current.mp4', config, mouse_icon, mouse_scale=0.1, process_icon=False, mode=mode)
+            
+            # End VAE timing and calculate metrics
+            if profile:
+                torch.cuda.synchronize()
+                vae_end.record()
+                
+                # Calculate times for this block
+                diffusion_time = diffusion_start.elapsed_time(diffusion_end)
+                vae_time = vae_start.elapsed_time(vae_end)
+                total_time = diffusion_time + vae_time
+                
+                # Update running totals
+                total_diffusion_time += diffusion_time
+                total_vae_time += vae_time
+                block_count += 1
+                
+                # Calculate FPS metrics
+                frames_generated = video.shape[0]  # Number of frames in this block
+                diffusion_fps = frames_generated * 1000 / diffusion_time
+                vae_fps = frames_generated * 1000 / vae_time  
+                total_fps = frames_generated * 1000 / total_time
+                
+                # Print per-block breakdown
+                print(f"\n=== Block {block_count} Performance Metrics ===")
+                print(f"Frames generated: {frames_generated}")
+                print(f"Diffusion time: {diffusion_time:.2f}ms ({diffusion_fps:.2f} FPS)")
+                print(f"VAE decode time: {vae_time:.2f}ms ({vae_fps:.2f} FPS)")  
+                print(f"Total time: {total_time:.2f}ms ({total_fps:.2f} FPS)")
+                print(f"Time breakdown - Diffusion: {diffusion_time/total_time*100:.1f}% | VAE: {vae_time/total_time*100:.1f}%")
+                
+                # Print cumulative averages
+                avg_diffusion_time = total_diffusion_time / block_count
+                avg_vae_time = total_vae_time / block_count
+                avg_total_time = avg_diffusion_time + avg_vae_time
+                avg_diffusion_fps = frames_generated * 1000 / avg_diffusion_time
+                avg_vae_fps = frames_generated * 1000 / avg_vae_time
+                avg_total_fps = frames_generated * 1000 / avg_total_time
+                
+                print(f"\n--- Cumulative Averages (over {block_count} blocks) ---")
+                print(f"Avg diffusion time: {avg_diffusion_time:.2f}ms ({avg_diffusion_fps:.2f} FPS)")
+                print(f"Avg VAE time: {avg_vae_time:.2f}ms ({avg_vae_fps:.2f} FPS)")
+                print(f"Avg total time: {avg_total_time:.2f}ms ({avg_total_fps:.2f} FPS)")
+                print(f"Avg breakdown - Diffusion: {avg_diffusion_time/avg_total_time*100:.1f}% | VAE: {avg_vae_time/avg_total_time*100:.1f}%")
+                print("=" * 50)
+            
             current_start_frame += current_num_frames
 
             if input("Continue? (Press `n` to break)").strip() == "n":
@@ -682,6 +751,33 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
             )
         process_video(video.astype(np.uint8), output_folder+f'/{name}_icon.mp4', config, mouse_icon, mouse_scale=0.1, mode=mode)
         process_video(video.astype(np.uint8), output_folder+f'/{name}.mp4', config, mouse_icon, mouse_scale=0.1, process_icon=False, mode=mode)
+
+        # Final profiling summary
+        if profile and block_count > 0:
+            total_frames = block_count * frames_generated
+            overall_diffusion_fps = total_frames * 1000 / total_diffusion_time
+            overall_vae_fps = total_frames * 1000 / total_vae_time
+            overall_total_fps = total_frames * 1000 / (total_diffusion_time + total_vae_time)
+            
+            print(f"\n{'='*60}")
+            print(f"FINAL SESSION SUMMARY")
+            print(f"{'='*60}")
+            print(f"Total blocks processed: {block_count}")
+            print(f"Total frames generated: {total_frames}")
+            print(f"")
+            print(f"Total diffusion time: {total_diffusion_time:.2f}ms")
+            print(f"Total VAE time: {total_vae_time:.2f}ms")
+            print(f"Total generation time: {total_diffusion_time + total_vae_time:.2f}ms")
+            print(f"")
+            print(f"Overall FPS:")
+            print(f"  - Diffusion only: {overall_diffusion_fps:.2f} FPS")
+            print(f"  - VAE only: {overall_vae_fps:.2f} FPS") 
+            print(f"  - Combined: {overall_total_fps:.2f} FPS")
+            print(f"")
+            print(f"Performance breakdown:")
+            print(f"  - Diffusion: {total_diffusion_time/(total_diffusion_time + total_vae_time)*100:.1f}% of time")
+            print(f"  - VAE: {total_vae_time/(total_diffusion_time + total_vae_time)*100:.1f}% of time")
+            print(f"{'='*60}")
 
         if return_latents:
             return output

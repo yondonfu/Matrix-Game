@@ -26,6 +26,7 @@ def parse_args():
                         help="Max number of output latent frames")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument("--pretrained_model_path", type=str, default="Matrix-Game-2.0", help="Path to the VAE model folder")
+    parser.add_argument("--profile", action="store_true", help="Enable performance profiling")
     args = parser.parse_args()
     return args
 
@@ -143,7 +144,8 @@ class InteractiveGameInference:
                 return_latents=False,
                 output_folder=self.args.output_folder,
                 name=os.path.basename(img_path),
-                mode=mode
+                mode=mode,
+                profile=self.args.profile
             )
         
 def main():
