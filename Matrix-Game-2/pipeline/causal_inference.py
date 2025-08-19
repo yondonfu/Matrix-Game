@@ -670,6 +670,12 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
                 
             denoised_pred = denoised_pred.transpose(1,2)
             video, vae_cache = self.vae_decoder(denoised_pred.half(), *vae_cache)
+            
+            # End VAE timing immediately after decoder
+            if profile:
+                torch.cuda.synchronize()
+                vae_end.record()
+            
             videos += [video]
             video = rearrange(video, "B T C H W -> B T H W C")
             video = ((video.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)[0]
@@ -686,11 +692,8 @@ class CausalInferenceStreamingPipeline(torch.nn.Module):
                 )
             process_video(video.astype(np.uint8), output_folder+f'/{name}_current.mp4', config, mouse_icon, mouse_scale=0.1, process_icon=False, mode=mode)
             
-            # End VAE timing and calculate metrics
+            # Calculate metrics
             if profile:
-                torch.cuda.synchronize()
-                vae_end.record()
-                
                 # Calculate times for this block
                 diffusion_time = diffusion_start.elapsed_time(diffusion_end)
                 vae_time = vae_start.elapsed_time(vae_end)
