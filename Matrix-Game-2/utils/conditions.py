@@ -1,6 +1,7 @@
 
 import torch
 import random
+import math
 
 def combine_data(data, num_frames=57, keyboard_dim=6, mouse=True):
     assert num_frames % 4 == 1
@@ -207,3 +208,111 @@ def Bench_actions_templerun(num_frames, num_samples_per_action=4):
             "keyboard_condition": torch.tensor(keyboard_condition)
         })
     return combine_data(data, num_frames, keyboard_dim=7, mouse=False)
+
+def Bench_orbit_fixed_point(num_frames, orbit_radius=2.0, orbit_speed=1.0, num_samples_per_action=4):
+    """
+    Generate action sequence for orbiting around a fixed point while keeping camera focused on it.
+    
+    Args:
+        num_frames: Total number of frames to generate
+        orbit_radius: Radius of the circular orbit (affects movement intensity)
+        orbit_speed: Speed of orbit (1.0 = one full circle over all frames)
+        num_samples_per_action: Samples per action frame (for consistency with other Bench_ functions)
+    """
+    
+    KEYBOARD_IDX = { 
+        "forward": 0, "back": 1, "left": 2, "right": 3
+    }
+    
+    CAM_VALUE = 0.1
+    
+    # Calculate the number of action frames we need
+    num_action_frames = (num_frames - 1) // 4 + 1
+    
+    data = []
+    
+    for frame_idx in range(num_action_frames):
+        # Calculate current angle in the orbit
+        angle = (frame_idx / max(1, num_action_frames - 1)) * 2 * math.pi * orbit_speed
+        
+        # Calculate position on circle (x, z plane, y is up which we don't change)
+        x = orbit_radius * math.cos(angle)
+        z = orbit_radius * math.sin(angle)
+        
+        # Calculate movement direction based on tangent to circle
+        # Tangent vector gives us the direction we should move
+        tangent_x = -orbit_radius * math.sin(angle)
+        tangent_z = orbit_radius * math.cos(angle)
+        
+        # Normalize tangent vector
+        tangent_length = math.sqrt(tangent_x**2 + tangent_z**2)
+        if tangent_length > 0:
+            tangent_x /= tangent_length
+            tangent_z /= tangent_length
+        
+        # Convert tangent to movement commands
+        keyboard_condition = [[0, 0, 0, 0] for _ in range(num_samples_per_action)]
+        
+        # Forward/back component (z-axis)
+        if tangent_z > 0.3:  # Moving forward
+            for row in keyboard_condition:
+                row[KEYBOARD_IDX["forward"]] = 1
+        elif tangent_z < -0.3:  # Moving backward
+            for row in keyboard_condition:
+                row[KEYBOARD_IDX["back"]] = 1
+        
+        # Left/right component (x-axis)
+        if tangent_x > 0.3:  # Moving right
+            for row in keyboard_condition:
+                row[KEYBOARD_IDX["right"]] = 1
+        elif tangent_x < -0.3:  # Moving left
+            for row in keyboard_condition:
+                row[KEYBOARD_IDX["left"]] = 1
+        
+        # Handle diagonal movement - combine forward/back with left/right
+        if abs(tangent_x) > 0.1 and abs(tangent_z) > 0.1:
+            # For diagonal movement, use both keys with reduced threshold
+            if tangent_z > 0.1:  # Forward component
+                for row in keyboard_condition:
+                    row[KEYBOARD_IDX["forward"]] = 1
+            elif tangent_z < -0.1:  # Back component
+                for row in keyboard_condition:
+                    row[KEYBOARD_IDX["back"]] = 1
+                    
+            if tangent_x > 0.1:  # Right component
+                for row in keyboard_condition:
+                    row[KEYBOARD_IDX["right"]] = 1
+            elif tangent_x < -0.1:  # Left component
+                for row in keyboard_condition:
+                    row[KEYBOARD_IDX["left"]] = 1
+        
+        # Calculate camera rotation to keep looking at center (0,0,0)
+        # We need to look from our position (x, z) toward the center (0, 0)
+        look_angle = math.atan2(-x, -z)  # Angle to look toward center
+        camera_angle = math.atan2(-tangent_x, -tangent_z)  # Current movement direction
+        
+        # Calculate the angle difference we need to rotate the camera
+        angle_diff = look_angle - camera_angle
+        
+        # Normalize angle difference to [-pi, pi]
+        while angle_diff > math.pi:
+            angle_diff -= 2 * math.pi
+        while angle_diff < -math.pi:
+            angle_diff += 2 * math.pi
+        
+        # Convert angle difference to mouse movement
+        # Positive angle_diff means we need to turn right, negative means left
+        mouse_horizontal = angle_diff * CAM_VALUE * 2  # Scale the rotation
+        
+        # Clamp mouse movement to reasonable values
+        mouse_horizontal = max(-CAM_VALUE * 2, min(CAM_VALUE * 2, mouse_horizontal))
+        
+        # Create mouse condition (vertical=0 as requested, horizontal=calculated)
+        mouse_condition = [[0, mouse_horizontal] for _ in range(num_samples_per_action)]
+        
+        data.append({
+            "keyboard_condition": torch.tensor(keyboard_condition),
+            "mouse_condition": torch.tensor(mouse_condition)
+        })
+    
+    return combine_data(data, num_frames, keyboard_dim=4, mouse=True)
