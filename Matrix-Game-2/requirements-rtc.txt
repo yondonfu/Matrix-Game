@@ -1,0 +1,7 @@
+# FastRTC Real-Time Streaming Dependencies
+# Install with: pip install -r requirements-rtc.txt
+
+# Core FastRTC (will pull in aiortc, aioice, etc.)
+fastrtc>=0.0.30
+opencv-python
+twilio
