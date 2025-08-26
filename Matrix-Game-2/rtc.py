@@ -32,4 +32,4 @@ stream = Stream(
     mode="receive",
 )
 
-stream.ui.launch(server_name="0.0.0.0", server_port=8000)
+stream.ui.launch(server_name="0.0.0.0", server_port=8888)
