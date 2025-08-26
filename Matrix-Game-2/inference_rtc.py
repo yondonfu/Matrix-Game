@@ -4,6 +4,9 @@ import torch
 import copy
 import numpy as np
 from typing import Generator
+from collections import deque
+from einops import rearrange
+import gradio as gr
 
 from omegaconf import OmegaConf
 from torchvision.transforms import v2
@@ -18,8 +21,77 @@ from utils.misc import set_seed
 from utils.wan_wrapper import WanDiffusionWrapper
 from safetensors.torch import load_file
 
-from fastrtc import Stream
+from fastrtc import WebRTC
 from twilio.rest import Client
+
+# Global action queue
+move_queue = deque()
+camera_queue = deque()
+
+def handle_move_up():
+    move_queue.append("w")
+    print("move up")
+
+def handle_move_down():
+    move_queue.append("s")
+    print("move down")
+
+def handle_move_left():
+    move_queue.append("a")
+    print("move left")
+
+def handle_move_right():
+    move_queue.append("d")
+    print("move right")
+
+def handle_camera_up():
+    camera_queue.append("i")
+    print("camera up")
+
+def handle_camera_down():
+    camera_queue.append("k")
+    print("camera down")
+
+def handle_camera_left():
+    camera_queue.append("j")
+    print("camera left")
+
+def handle_camera_right():
+    camera_queue.append("l")
+    print("camera right")
+
+def get_action_cond(idx_mouse, idx_keyboard):
+    CAM_VALUE = 0.1
+    CAMERA_VALUE_MAP = {
+        "i":  [CAM_VALUE, 0],
+        "k":  [-CAM_VALUE, 0],
+        "j":  [0, -CAM_VALUE],
+        "l":  [0, CAM_VALUE],
+        "u":  [0, 0]
+    }
+    KEYBOARD_IDX = { 
+        "w": [1, 0, 0, 0], "s": [0, 1, 0, 0], "a": [0, 0, 1, 0], "d": [0, 0, 0, 1],
+        "q": [0, 0, 0, 0]
+    }
+
+    mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse]).cuda()
+    keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).cuda()
+
+    return {
+        "mouse": mouse_cond,
+        "keyboard": keyboard_cond
+    }
+
+def get_current_actions():
+    idx_mouse = "u"
+    if camera_queue:
+        idx_mouse = camera_queue.pop()
+
+    idx_keyboard = "q"
+    if move_queue:
+        idx_keyboard = move_queue.pop()
+
+    return get_action_cond(idx_mouse, idx_keyboard)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -181,22 +253,25 @@ class InteractiveGameInference:
                     return_latents=False,
                     mode=mode,
                     profile=self.args.profile,
-                    vae_cache=self.vae_cache
+                    vae_cache=self.vae_cache,
+                    get_current_actions=get_current_actions
                 ):
                     # tensor_batch shape: (b, f, c, h, w)
                     _, num_frames, _, _, _ = tensor_batch.shape
                     
+                    tensor_batch = rearrange(tensor_batch, "B T C H W -> B T H W C")
                     # Iterate through each frame in the batch
                     for frame_idx in range(num_frames):
-                        # Extract single frame: (b, c, h, w) -> (c, h, w) for first batch
-                        frame = tensor_batch[0, frame_idx]  # (c, h, w)
-                        
-                        # Convert to numpy and rearrange to (h, w, c)
-                        frame_numpy = frame.detach().cpu().numpy().transpose(1, 2, 0)
-                        
+                        # Extract single frame
+                        frame = tensor_batch[0, frame_idx]  # (h, w, c)
+
                         # Convert from normalized range to uint8 (0-255)
                         # Assuming your frames are in range [-1, 1]
-                        frame_numpy = ((frame_numpy + 1) * 127.5).clip(0, 255).astype(np.uint8)
+                        frame_numpy = ((frame.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)
+
+                        # Convert from RGB to BGR because fastrtc expects a BGR np.ndarray
+                        # https://github.com/gradio-app/fastrtc/blob/ce11e4d6f4e10bc7b3a8f879b7f0473b9d64dcb3/backend/fastrtc/tracks.py#L131
+                        frame_numpy = frame_numpy[..., ::-1]
                         
                         yield frame_numpy
                         
@@ -225,14 +300,45 @@ def main():
     def frame_handler():
         return pipeline.stream_frames()
     
-    stream = Stream(
-        handler=frame_handler,
-        rtc_configuration=rtc_configuration,
-        modality="video",
-        mode="receive",
-    )
+    # Create Gradio interface with buttons
+    with gr.Blocks() as demo:
+        with gr.Row():
+            with gr.Column():
+                start_button = gr.Button("Start Stream", variant="primary")
 
-    stream.ui.launch(server_name="0.0.0.0", server_port=8888)
+                move_up_button = gr.Button("🚶 Up", variant="secondary")
+                move_up_button.click(fn=handle_move_up)
+
+                move_down_button = gr.Button("🚶 Down", variant="secondary")
+                move_down_button.click(fn=handle_move_down)
+
+                move_left_button = gr.Button("🚶 Left", variant="secondary")
+                move_left_button.click(fn=handle_move_left)
+
+                move_right_button = gr.Button("🚶 Right", variant="secondary")
+                move_right_button.click(fn=handle_move_right)
+
+                camera_up_button = gr.Button("🎥 Up", variant="secondary")
+                camera_up_button.click(fn=handle_camera_up)
+
+                camera_down_button = gr.Button("🎥 Down", variant="secondary")
+                camera_down_button.click(fn=handle_camera_down)
+
+                camera_left_button = gr.Button("🎥 Left", variant="secondary")
+                camera_left_button.click(fn=handle_camera_left)
+
+                camera_right_button = gr.Button("🎥 Right", variant="secondary")
+                camera_right_button.click(fn=handle_camera_right)
+
+            with gr.Column():
+                video = WebRTC(
+                    modality="video",
+                    mode="receive",
+                    rtc_configuration=rtc_configuration
+                )
+            video.stream(fn=frame_handler, inputs=[], outputs=[video], trigger=start_button.click)
+
+    demo.launch(server_name="0.0.0.0", server_port=8888)
 
 if __name__ == "__main__":
     main()

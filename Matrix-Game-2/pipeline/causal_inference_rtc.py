@@ -1,36 +1,10 @@
 from typing import Optional, Generator, Union
 import torch
 import copy
-import random
 
 from einops import rearrange
 from utils.wan_wrapper import WanDiffusionWrapper
 from demo_utils.constant import ZERO_VAE_CACHE
-
-def get_current_actions():
-    CAM_VALUE = 0.1
-    CAMERA_VALUE_MAP = {
-        "i":  [CAM_VALUE, 0],
-        "k":  [-CAM_VALUE, 0],
-        "j":  [0, -CAM_VALUE],
-        "l":  [0, CAM_VALUE],
-        "u":  [0, 0]
-    }
-    KEYBOARD_IDX = { 
-        "w": [1, 0, 0, 0], "s": [0, 1, 0, 0], "a": [0, 0, 1, 0], "d": [0, 0, 0, 1],
-        "q": [0, 0, 0, 0]
-    }
-
-    idx_mouse = "u"
-    idx_keyboard = random.choice(list(KEYBOARD_IDX.keys()))
-
-    mouse_cond = torch.tensor(CAMERA_VALUE_MAP[idx_mouse]).cuda()
-    keyboard_cond = torch.tensor(KEYBOARD_IDX[idx_keyboard]).cuda()
-
-    return {
-        "mouse": mouse_cond,
-        "keyboard": keyboard_cond
-    }
 
 def cond_current(conditional_dict, current_start_frame, num_frame_per_block, replace=None, mode='universal'):
     
@@ -102,6 +76,7 @@ class CausalInferenceRTCPipeline(torch.nn.Module):
         mode = 'universal',
         profile = False,
         vae_cache = None,
+        get_current_actions = None,
     ) -> Generator[torch.Tensor, None, torch.Tensor]:
         """
         Perform inference on the given noise and text prompts.
@@ -224,7 +199,7 @@ class CausalInferenceRTCPipeline(torch.nn.Module):
             noisy_input = noise[
                 :, :, current_start_frame - num_input_frames:current_start_frame + current_num_frames - num_input_frames]
 
-            current_actions = get_current_actions()
+            current_actions = get_current_actions() if get_current_actions is not None else None
             new_act, conditional_dict = cond_current(conditional_dict, current_start_frame, self.num_frame_per_block, replace=current_actions, mode=mode)
             
             # Step 3.1: Spatial denoising loop
@@ -294,6 +269,8 @@ class CausalInferenceRTCPipeline(torch.nn.Module):
                 diffusion_end.record()
 
             # Step 3.4: update the start and end frame indices and decode with VAE
+            current_start_frame += current_num_frames
+
             if profile:
                 torch.cuda.synchronize()
                 vae_start.record()
@@ -301,10 +278,7 @@ class CausalInferenceRTCPipeline(torch.nn.Module):
             denoised_pred = denoised_pred.transpose(1,2)
             # print(f"Runtime VAE decoder input dims: {list(denoised_pred.shape)} with dtype {denoised_pred.dtype} -> .half()")
             video, vae_cache = self.vae_decoder(denoised_pred.half(), *vae_cache)
-            
-            # Yield each frame as it becomes available
-            yield video
-            
+
             # End VAE timing immediately after decoder
             if profile:
                 torch.cuda.synchronize()
@@ -351,8 +325,9 @@ class CausalInferenceRTCPipeline(torch.nn.Module):
                 print(f"Avg breakdown - Diffusion: {avg_diffusion_time/avg_total_time*100:.1f}% | VAE: {avg_vae_time/avg_total_time*100:.1f}%")
                 print("=" * 50)
             
-            current_start_frame += current_num_frames
-
+            # Yield each frame as it becomes available
+            yield video
+            
         # Return final output after all frames have been yielded
         if return_latents:
             return output
