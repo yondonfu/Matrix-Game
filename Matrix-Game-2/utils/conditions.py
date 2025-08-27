@@ -112,6 +112,29 @@ def Bench_actions_universal(num_frames, num_samples_per_action=4):
         })
     return combine_data(data, num_frames, keyboard_dim=4, mouse=True)
 
+def Bench_actions_universal_static(num_frames, num_samples_per_action=4):
+    """
+    Generate static (no action) conditioning data for universal mode.
+    Creates conditioning that reflects no mouse movement and no keyboard input.
+    """
+    # Create single static action representing no input
+    actions_to_test = ["no_action"]
+    
+    data = []
+    
+    for action_name in actions_to_test:
+        # No keyboard input (all zeros for WASD)
+        keyboard_condition = [[0, 0, 0, 0] for _ in range(num_samples_per_action)] 
+        # No mouse movement (all zeros for camera)
+        mouse_condition = [[0, 0] for _ in range(num_samples_per_action)] 
+
+        data.append({
+            "keyboard_condition": torch.tensor(keyboard_condition),
+            "mouse_condition": torch.tensor(mouse_condition)
+        })
+    
+    return combine_data(data, num_frames, keyboard_dim=4, mouse=True)
+
 
 def Bench_actions_gta_drive(num_frames, num_samples_per_action=4):
     actions_single_action = [
