@@ -61,7 +61,7 @@ class InteractiveGameInference:
         current_vae_decoder.to(self.device, torch.float16)
         current_vae_decoder.requires_grad_(False)
         current_vae_decoder.eval()
-        current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
+        # current_vae_decoder.compile(mode="max-autotune-no-cudagraphs")
         pipeline = CausalInferencePipeline(self.config, generator=generator, vae_decoder=current_vae_decoder)
         if self.args.checkpoint_path:
             print("Loading Pretrained Model...")
