@@ -191,6 +191,29 @@ def Bench_actions_gta_drive(num_frames, num_samples_per_action=4):
         })
     return combine_data(data, num_frames, keyboard_dim=2, mouse=True)
 
+def Bench_actions_gta_drive_static(num_frames, num_samples_per_action=4):
+    """
+    Generate static (no action) conditioning data for GTA drive mode.
+    Creates conditioning that reflects no keyboard input and no mouse movement.
+    """
+    # Create single static action representing no input
+    actions_to_test = ["no_action"]
+    
+    data = []
+    
+    for action_name in actions_to_test:
+        # No keyboard input (all zeros for forward/back)
+        keyboard_condition = [[0, 0] for _ in range(num_samples_per_action)] 
+        # No mouse movement (all zeros for camera)
+        mouse_condition = [[0, 0] for _ in range(num_samples_per_action)] 
+
+        data.append({
+            "keyboard_condition": torch.tensor(keyboard_condition),
+            "mouse_condition": torch.tensor(mouse_condition)
+        })
+    
+    return combine_data(data, num_frames, keyboard_dim=2, mouse=True)
+
 def Bench_actions_templerun(num_frames, num_samples_per_action=4):
     actions_single_action = [
         "jump",
@@ -222,6 +245,61 @@ def Bench_actions_templerun(num_frames, num_samples_per_action=4):
                 continue
             # print(f"action name: {action_name} sub_act: {sub_act}")
             elif sub_act in KEYBOARD_IDX:
+                col = KEYBOARD_IDX[sub_act]
+                for row in keyboard_condition:
+                    row[col] = 1
+
+        data.append({
+            "keyboard_condition": torch.tensor(keyboard_condition)
+        })
+    return combine_data(data, num_frames, keyboard_dim=7, mouse=False)
+
+def Bench_actions_templerun_static(num_frames, num_samples_per_action=4):
+    """
+    Generate static (no action) conditioning data for templerun mode.
+    Creates conditioning that reflects no keyboard input or actions.
+    """
+    # Create single static action representing no input
+    actions_to_test = ["no_action"]
+    
+    data = []
+    
+    for action_name in actions_to_test:
+        # No keyboard input (all zeros for all 7 actions)
+        keyboard_condition = [[0, 0, 0, 0, 0, 0, 0] for _ in range(num_samples_per_action)] 
+
+        data.append({
+            "keyboard_condition": torch.tensor(keyboard_condition)
+        })
+    
+    return combine_data(data, num_frames, keyboard_dim=7, mouse=False)
+
+def Bench_actions_templerun_nomove(num_frames, num_samples_per_action=4):
+    """
+    Generate conditioning data for templerun with only nomove action.
+    Creates conditioning that reflects no movement in the game.
+    """
+    actions_single_action = [
+        "nomove"
+    ]
+
+    actions_to_test = actions_single_action
+    base_action = actions_single_action
+
+    KEYBOARD_IDX = { 
+        "nomove": 0, "jump": 1, "slide": 2, "turnleft": 3,
+        "turnright": 4, "leftside": 5, "rightside": 6
+    }
+
+    data = []
+
+    for action_name in actions_to_test:
+        keyboard_condition = [[0, 0, 0, 0, 0, 0, 0] for _ in range(num_samples_per_action)] 
+
+        for sub_act in base_action:
+            if not sub_act in action_name:
+                continue
+            if sub_act in KEYBOARD_IDX:
                 col = KEYBOARD_IDX[sub_act]
                 for row in keyboard_condition:
                     row[col] = 1

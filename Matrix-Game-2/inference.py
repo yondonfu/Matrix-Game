@@ -122,11 +122,11 @@ class InteractiveGameInference:
             mouse_condition = cond_data['mouse_condition'].unsqueeze(0).to(device=self.device, dtype=self.weight_dtype)
             conditional_dict['mouse_cond'] = mouse_condition
         elif mode == 'gta_drive':
-            cond_data = Bench_actions_gta_drive(num_frames)
+            cond_data = Bench_actions_gta_drive_static(num_frames)
             mouse_condition = cond_data['mouse_condition'].unsqueeze(0).to(device=self.device, dtype=self.weight_dtype)
             conditional_dict['mouse_cond'] = mouse_condition
         else:
-            cond_data = Bench_actions_templerun(num_frames)
+            cond_data = Bench_actions_templerun_static(num_frames)
         keyboard_condition = cond_data['keyboard_condition'].unsqueeze(0).to(device=self.device, dtype=self.weight_dtype)
         conditional_dict['keyboard_cond'] = keyboard_condition
         
