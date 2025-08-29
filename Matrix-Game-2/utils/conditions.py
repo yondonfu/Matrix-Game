@@ -135,6 +135,59 @@ def Bench_actions_universal_static(num_frames, num_samples_per_action=4):
     
     return combine_data(data, num_frames, keyboard_dim=4, mouse=True)
 
+def Bench_actions_universal_mixed(num_frames, num_samples_per_action=4, no_action_ratio=0.2):
+    """
+    Generate mixed conditioning data for universal mode that includes sequences of no action inputs.
+    Starts and ends with actual action inputs, with no-action sequences in the middle.
+    """
+    # Simple approach: generate full sequences and splice them together
+    # Calculate rough frame distribution  
+    start_end_frames = max(5, int(num_frames * (1.0 - no_action_ratio) / 2))
+    
+    # Ensure frame counts are valid for combine_data (num_frames % 4 == 1)
+    if start_end_frames % 4 != 1:
+        start_end_frames = ((start_end_frames - 1) // 4) * 4 + 1
+    
+    middle_frames = max(1, num_frames - 2 * start_end_frames)
+    if middle_frames % 4 != 1:
+        middle_frames = ((middle_frames - 1) // 4) * 4 + 1
+    
+    # Generate sections using existing functions
+    start_data = Bench_actions_universal(start_end_frames, num_samples_per_action)
+    middle_data = Bench_actions_universal_static(middle_frames, num_samples_per_action) 
+    end_data = Bench_actions_universal(start_end_frames, num_samples_per_action)
+    
+    # Concatenate sections
+    keyboard_condition = torch.cat([
+        start_data["keyboard_condition"],
+        middle_data["keyboard_condition"], 
+        end_data["keyboard_condition"]
+    ], dim=0)
+    
+    mouse_condition = torch.cat([
+        start_data["mouse_condition"],
+        middle_data["mouse_condition"],
+        end_data["mouse_condition"] 
+    ], dim=0)
+    
+    # Ensure exact length
+    current_length = keyboard_condition.shape[0]
+    if current_length > num_frames:
+        keyboard_condition = keyboard_condition[:num_frames]
+        mouse_condition = mouse_condition[:num_frames]
+    elif current_length < num_frames:
+        # Pad with zeros if too short
+        padding_frames = num_frames - current_length
+        keyboard_pad = torch.zeros((padding_frames, 4))
+        mouse_pad = torch.zeros((padding_frames, 2))
+        keyboard_condition = torch.cat([keyboard_condition, keyboard_pad], dim=0)
+        mouse_condition = torch.cat([mouse_condition, mouse_pad], dim=0)
+    
+    return {
+        "keyboard_condition": keyboard_condition,
+        "mouse_condition": mouse_condition
+    }
+
 
 def Bench_actions_gta_drive(num_frames, num_samples_per_action=4):
     actions_single_action = [

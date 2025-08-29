@@ -118,7 +118,7 @@ class InteractiveGameInference:
         }
         
         if mode == 'universal':
-            cond_data = Bench_actions_universal_static(num_frames)
+            cond_data = Bench_actions_universal_mixed(num_frames)
             mouse_condition = cond_data['mouse_condition'].unsqueeze(0).to(device=self.device, dtype=self.weight_dtype)
             conditional_dict['mouse_cond'] = mouse_condition
         elif mode == 'gta_drive':
