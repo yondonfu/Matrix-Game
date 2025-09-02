@@ -245,39 +245,39 @@ class InteractiveGameInference:
     
     def stream_frames(self) -> Generator[np.ndarray, None, None]:
         mode = self.config.mode
-        try:
-            with torch.no_grad():
-                for tensor_batch in self.pipeline.inference(
-                    noise=self.sampled_noise,
-                    conditional_dict=self.conditional_dict,
-                    return_latents=False,
-                    mode=mode,
-                    profile=self.args.profile,
-                    vae_cache=self.vae_cache,
-                    get_current_actions=get_current_actions
-                ):
-                    # tensor_batch shape: (b, f, c, h, w)
-                    _, num_frames, _, _, _ = tensor_batch.shape
+        with torch.no_grad():
+            frame_count = 0
+            for tensor_batch in self.pipeline.inference(
+                noise=self.sampled_noise,
+                conditional_dict=self.conditional_dict,
+                return_latents=False,
+                mode=mode,
+                profile=self.args.profile,
+                vae_cache=self.vae_cache,
+                get_current_actions=get_current_actions
+            ):
+                # tensor_batch shape: (b, f, c, h, w)
+                _, num_frames, _, _, _ = tensor_batch.shape
+                frame_count += num_frames
+                print("tensor_batch", tensor_batch.shape)
+                print("frame_count", frame_count)
+                
+                tensor_batch = rearrange(tensor_batch, "B T C H W -> B T H W C")
+                # Iterate through each frame in the batch
+                for frame_idx in range(num_frames):
+                    # Extract single frame
+                    frame = tensor_batch[0, frame_idx]  # (h, w, c)
+
+                    # Convert from normalized range to uint8 (0-255)
+                    # Assuming your frames are in range [-1, 1]
+                    frame_numpy = ((frame.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)
+
+                    # Convert from RGB to BGR because fastrtc expects a BGR np.ndarray
+                    # https://github.com/gradio-app/fastrtc/blob/ce11e4d6f4e10bc7b3a8f879b7f0473b9d64dcb3/backend/fastrtc/tracks.py#L131
+                    frame_numpy = frame_numpy[..., ::-1]
                     
-                    tensor_batch = rearrange(tensor_batch, "B T C H W -> B T H W C")
-                    # Iterate through each frame in the batch
-                    for frame_idx in range(num_frames):
-                        # Extract single frame
-                        frame = tensor_batch[0, frame_idx]  # (h, w, c)
-
-                        # Convert from normalized range to uint8 (0-255)
-                        # Assuming your frames are in range [-1, 1]
-                        frame_numpy = ((frame.float() + 1) * 127.5).clip(0, 255).cpu().numpy().astype(np.uint8)
-
-                        # Convert from RGB to BGR because fastrtc expects a BGR np.ndarray
-                        # https://github.com/gradio-app/fastrtc/blob/ce11e4d6f4e10bc7b3a8f879b7f0473b9d64dcb3/backend/fastrtc/tracks.py#L131
-                        frame_numpy = frame_numpy[..., ::-1]
-                        
-                        yield frame_numpy
-                        
-        except Exception as e:
-            print(f"Error during frame processing: {e}")
-
+                    yield frame_numpy
+                    
 def main():
     """Main entry point for video generation."""
     args = parse_args()
